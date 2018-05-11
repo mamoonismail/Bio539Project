@@ -1,0 +1,431 @@
+---
+title: "Groundwater Data Analysis"
+author: "Mamoon Y. Ismail"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Introduction
+
+Groundwater data are developed for descriptive and interpretive applications. An understanding of the consistency and quality of the groundwater data, will enhance the level of hydrologic understanding. Data analysis, manipulation, and interpreation takes long time. Analyzing the data to investigate trends and relationships.
+
+Plotting our data allows us to quickly see general patterns including outlier points and trends. Plots are also a useful way to communicate the results of our research.
+
+
+## Global Options
+
+```{r global_options, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE,
+                      fig.width=10, fig.height=8, fig.path='figures/')
+```
+
+
+## Required R packages
+
+```{r loadlib, echo=TRUE}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(gridExtra)
+library(ggpubr)
+library(scales)
+library(ggthemes)
+```
+
+
+## Reading Data
+
+```{r loaddata, echo=TRUE}
+quality <- read.csv("data/AmmQuality.csv", stringsAsFactors = FALSE)
+waterlevel <- read.csv("data/AmmWaterlevel.csv", stringsAsFactors = FALSE)
+waterabstr <- read.csv("data/AmmAbstraction.csv", stringsAsFactors = FALSE, check.names=F)
+```
+
+
+##1- Quality Data Analysis
+
+Quality dataset comprises `r nrow(quality)` observations and `r ncol(quality)` variables.
+To get an idea about the quality dataset and the parametres that have been analyzed and the number of the analysis carried out for each is and clean the data by removing NA's
+
+```{r parameter_analysis}
+qualitycleaned <- quality %>% filter(!is.na(Value), Station.ID != "", Parameter != "")
+par_count <-
+  qualitycleaned %>% 
+  group_by(Parameter) %>%
+  summarise(analysis_count = n()) %>%
+  arrange(desc(analysis_count))
+ggbarplot(par_count, x = "Parameter", y = "analysis_count", fill = "steelblue", 
+          title = "Number of Analysis Carried for each Parameter") +
+          theme(axis.text.x = element_text(angle = 60, hjust = 1))
+ggsave("figures/Number_of_Analysis.png", width = 6, dpi=300)
+
+```
+
+It shows that Electrical conuctivity (EC) and pH are the highest parametres analyzed.
+
+
+###a- Summary Statistics
+Nitrate (NO3) and Electrical Conductivity (EC) are very important parameters for drinking water quality, thus we need to do further interpretation. Then we will create a quality dataset for NO3 and EC only
+
+```{r quality_Summary}
+qualitycleaned %>%
+  group_by(Station.ID, Year, Parameter) %>%
+  summarise(analysis_count = n(),
+            mean = mean(Value),
+            min = min(Value),
+            max = max(Value)) %>%
+  filter(analysis_count > 2, Parameter == "Nitrate") %>%
+  arrange(desc(max))
+
+qualitycleaned %>%
+  group_by(Station.ID, Year, Parameter) %>%
+  summarise(analysis_count = n(),
+            mean = mean(Value),
+            min = min(Value),
+            max = max(Value)) %>%
+  filter(analysis_count > 2, Parameter == "Electrical Conductivity") %>%
+  arrange(desc(max))
+
+Ec_Nitrate <- qualitycleaned %>%
+  filter(Parameter == "Electrical Conductivity" | Parameter == "Nitrate")
+
+```
+
+Summarize for annual mean, max, min, and number of analysis for (NO3 & EC) for each well and exclude those who has less than two analysis per year. It shows that well (AL1373) has the highest value of Nitrate (276 g\l), and well (AL1325) has the highest EC value (11400 Ms/cm)
+
+
+###b- Electrical Conductivity Interpretation
+
+Longer records of EC analysis were investigated for further interpretation, thus assuming monthly EC were carried out and we are interested in wells that have more than five years of record (which means exclude wells which have less than 60 analysis record).
+
+```{r EC_Long}
+EC_count <- Ec_Nitrate %>%
+  filter(Parameter == "Electrical Conductivity") %>%
+  group_by(Station.ID) %>%
+  summarise(analysis_count = n())%>%
+  filter(analysis_count > 60)%>%
+  arrange(desc(analysis_count))
+
+ggbarplot(EC_count, x = "Station.ID", y = "analysis_count", fill = "green", 
+          title = "Number of EC Analysis For Each Well") +
+          theme(axis.text.x = element_text(angle = 60, hjust = 1))
+ggsave("figures/Number_of_EC_Analysis_Well.png", width = 6, dpi=300)
+
+```
+
+
+Calculating the mean of the wells which have long EC analysis record and define their suitability for drinking purposes. The highest threshold based on Jordanian standards for drinking water is (1500Ms/cm)
+
+```{r EC_Long_Mean}
+EC_mean <- Ec_Nitrate%>%
+  group_by(Station.ID, Parameter)%>%
+  summarise(meanEC = mean(Value, na.rm=TRUE))%>%
+  filter(Parameter == "Electrical Conductivity")%>%
+  arrange(desc(meanEC))
+
+EC_join <- left_join(EC_count, EC_mean)
+
+ggbarplot(EC_join, x = "Station.ID", y = "meanEC", fill = "grey", 
+          title = "Average EC For Each Well") +
+          theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  geom_hline (yintercept = 1500, linetype = "dashed", color = "red", size = 1)
+ggsave("figures/Average_EC_Analysis_Well.png", width = 6, dpi=300)
+
+EC_join %>% filter (meanEC > 1500) %>% tally()
+EC_join %>% filter (meanEC <= 1500) %>% tally()
+
+```
+
+11 wells out of 23 have average EC greater than (1500) and are not adequate for drinking water, and 12 wells have average EC equal or less than 1500 and considered adequate for drinking purposes.
+
+
+
+To have a better view of EC changes among the wells and their record variation by using faciting
+
+```{r EC_Faciting}
+EC_all <- qualitycleaned %>%
+  filter(Parameter == "Electrical Conductivity")
+EC_joinseries <- left_join(EC_count, EC_all)
+
+EC_joinseries$date <- ymd(paste(EC_joinseries$Year,EC_joinseries$Month,EC_joinseries$Day,sep="-"))
+
+ggplot(EC_joinseries, aes(x=date, y=Value)) +
+  geom_line()+facet_wrap(~Station.ID) + theme_cleveland() +
+  theme(panel.grid = element_blank()) + xlab('Date') + ylab('EC (Us/cm)') +
+  theme(axis.text.x = element_text(colour = "grey20", size = 10, angle = 90, hjust = 0.5, vjust = 0.5))
+ggsave("figures/Facet_EC_Analysis_AllWell.png", width = 6, dpi=300)
+
+```
+
+Faciting plot clearly shows the variation in recording length for the wells and variation in EC values
+
+
+In a closer investigation for the well that has the longest record of EC analysis
+
+```{r EC_Longestwell}
+qualitycleaned %>%
+  filter(Parameter == "Electrical Conductivity") %>%
+  group_by(Station.ID) %>%
+  summarise(analysis_count = n())%>%
+  arrange(desc(analysis_count))%>%
+  filter(analysis_count == max(analysis_count))
+  
+LongestEC <- qualitycleaned %>% select(Station.ID, Parameter, Year, Month, Day, Value) %>%
+  filter(Station.ID == 'AL2691', Parameter == 'Electrical Conductivity') %>%
+  arrange(Year)
+
+LongestEC$date <- ymd(paste(LongestEC$Year,LongestEC$Month,LongestEC$Day,sep="-"))
+
+ggplot(LongestEC, aes(date, Value)) +
+  geom_point(color="blue", size=2, shape=19 ) +
+  ggtitle("Electrical Conductivity for Well AL2691 (1995-2005)") +
+  xlab("Date") + ylab("EC (Us/cm)") +
+  (scale_x_date(breaks=date_breaks("2 years"), labels=date_format("%b %y"))) +
+  theme_cleveland() + geom_smooth(method = "lm")
+ggsave("figures/EC_Timeseries_AL2691.png", width = 6, dpi=300)
+```
+
+It shows that salinity is increasing from (1995 - 2005), the shaded area around the trend lines indicates the 95% confidence interval and that the true regression line lies within the shaded region.
+
+
+
+###c- Nitrate Interpretation
+
+Longer records of Nitrate analysis were investigated for further interpretation, thus assuming monthly Nitrate were carried out and we are interested in wells that have more than five years of record (which means exclude wells which have less than 60 analysis record).
+
+```{r N_Long}
+N_count <- Ec_Nitrate %>%
+  filter(Parameter == "Nitrate") %>%
+  group_by(Station.ID) %>%
+  summarise(analysis_count = n())%>%
+  filter(analysis_count > 60)%>%
+  arrange(desc(analysis_count))
+
+ggbarplot(N_count, x = "Station.ID", y = "analysis_count", fill = "green", 
+          title = "Number of Nitrate Analysis For Each Well") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+ggsave("figures/Number_of_N_Analysis_Well.png", width = 6, dpi=300)
+```
+
+
+Calculating the mean of the wells which have long NO3 analysis record and define their suitability for drinking purposes. The highest threshold based on Jordanian standards for drinking water is (70 ppm), while EPA standard for Nitrate in drinking water (is 10 ppm)
+
+```{r N_Long_Mean}
+N_mean <- Ec_Nitrate%>%
+  group_by(Station.ID, Parameter)%>%
+  summarise(mean_N = mean(Value, na.rm=TRUE))%>%
+  filter(Parameter == "Nitrate")%>%
+  arrange(desc(mean_N))
+
+N_join <- left_join(N_count, N_mean)
+
+ggbarplot(N_join, x = "Station.ID", y = "mean_N", fill = "grey", 
+          title = "Average Nitrate For Each Well") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  geom_hline (yintercept = 70, linetype = "dashed", color = "red", size = 1) +
+  geom_hline (yintercept = 10, linetype = "dashed", color = "blue", size = 1)
+ggsave("figures/Average_N_Analysis_Well.png", width = 6, dpi=300)
+
+N_join %>% filter (mean_N > 70) %>% tally()
+N_join %>% filter (mean_N <= 70) %>% tally()
+N_join %>% filter (mean_N <= 10) %>% tally()
+
+```
+
+5 wells have average NO3 greater than 70 and not adequate for drinking purposes and 14 wells have average NO3 equal or less than 70 and are considered plausible for drinking.
+Based on the EPA standards only one well has No3 below standards and the rest are above the permissible level
+
+
+To have a better view of NO3 changes among the wells and their record variation by using faciting
+
+```{r N_Faciting}
+N_all <- qualitycleaned %>%
+  filter(Parameter == "Nitrate")
+
+N_joinseries <- left_join(N_count, N_all)
+
+N_joinseries$date <- ymd(paste(N_joinseries$Year,N_joinseries$Month,N_joinseries$Day,sep="-"))
+
+ggplot(N_joinseries, aes(x=date, y=Value)) +
+  geom_line()+facet_wrap(~Station.ID) + theme_cleveland() +
+  theme(panel.grid = element_blank()) + xlab('Date') + ylab('NO3 (ppm)') +
+  theme(axis.text.x = element_text(colour = "grey20", size = 10, angle = 90, hjust = 0.5, vjust = 0.5))
+ggsave("figs/Facet_N_Analysis_AllWell.png", width = 6, dpi=300)
+```
+
+Faciting plot clearly shows big variations in recording length for the wells and big variations in NO3 values in different wells
+
+
+In a closer investigation for the well that has the longest record of NO3 analysis
+
+```{r NO3_Longestwell}
+N_joinseries %>%
+  group_by(Station.ID) %>%
+  summarise(analysis_count = n())%>%
+  arrange(desc(analysis_count))%>%
+  filter(analysis_count == max(analysis_count))
+  
+LongestN <- N_joinseries %>% select(Station.ID, Parameter, Value, date) %>%
+  filter(Station.ID == 'AL2691') %>%
+  arrange(date)
+
+ggplot(LongestN, aes(date, Value)) +
+  geom_point(color="blue", size=2, shape=19 ) +
+  ggtitle("Nitrate for Well AL2691 (1995-2005)") +
+  xlab("Date") + ylab("NO3 (ppm)") +
+  (scale_x_date(breaks=date_breaks("2 years"), labels=date_format("%b %y"))) +
+  theme_cleveland() + geom_smooth(method = "lm")
+ggsave("figs/N_Timeseries_AL2691.png", width = 6, dpi=300)
+
+```
+
+It shows that NO3 was measured more frequent during the ninties, and big analysis discrapancy. toward the end NO3 results show a decreasing trend. whic contradicts increased abstraction rates and increased demand on water. We will investgate other wells for NO3 trend
+
+```{r NO3_AnyWell}
+N_joinseries %>% filter (Station.ID == "AL2715") %>%
+  ggplot(aes(x=date, y=Value)) +
+  geom_point(color="blue", size=2, shape=19 ) +
+  ggtitle("Nitrate for Well AL2715 (1985-2005)") +
+  xlab('Date') + ylab('NO3 (ppm)') +
+  (scale_x_date(breaks=date_breaks("2 years"), labels=date_format("%b %y"))) +
+  theme_cleveland() + geom_smooth(method = "lm")
+ggsave("figures/N_Timeseries_AL2715.png", width = 6, dpi=300)
+```
+
+It is obvious that groundwater quality is deteriorating as a result of over abstraction, NO3 was doubled within 20 years.
+
+
+
+##2- Water-level Data Analysis
+
+Water-level dataset comprises `r nrow(waterlevel)` observations and `r ncol(waterlevel)` variables.
+To get an idea about water-level dataset and how it responds to stresses let us start by removing NA's and those which has short records (less than 10 years) from the dataset. Create summary table and plot 
+
+```{r WL_Cleaned}
+wlcleaned <- waterlevel %>% filter(!is.na(DEPTH_TO_WATER), STATION_ID != "")
+
+wl_count <- wlcleaned %>%
+  group_by(STATION_ID) %>%
+  summarise(analysis_count = n())%>%
+  filter(analysis_count > 120)
+
+wlcleaned %>% 
+  group_by(STATION_ID) %>%
+  summarise(minwl = min(DEPTH_TO_WATER, na.rm=TRUE),
+            maxwl = max(DEPTH_TO_WATER, na.rm=TRUE),
+            meanwl = mean(DEPTH_TO_WATER, na.rm=TRUE))
+
+ggbarplot(wl_count, x = "STATION_ID", y = "analysis_count", fill = "green", 
+          title = "Number of Water-level Measurements For Each Well") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+ggsave("figures/Number_of_Water-level Measurements_Well.png", width = 6, dpi=300)
+
+```
+
+
+To compare between the monitoring wells and have a better view of water-level changes among the wells and their record variation by using faciting
+
+```{r WL_Faciting}
+wl_join <- left_join(wl_count, wlcleaned)
+
+wl_join$date <- ymd(paste(wl_join$Year,wl_join$Month,wl_join$Day,sep="-"))
+
+ggplot(wl_join, aes(x=date, y=DEPTH_TO_WATER)) +
+  geom_line()+facet_wrap(~STATION_ID) + theme_cleveland() +
+  theme(panel.grid = element_blank()) + xlab('Date') + ylab('Depth to water (m)') +
+  theme(axis.text.x = element_text(colour = "grey20", size = 10, angle = 90, hjust = 0.5, vjust = 0.5)) +
+  scale_y_reverse()
+ggsave("figures/Facet_WL_AllWell.png", width = 6, dpi=300)
+
+```
+
+Monitoring wells show different start up and some wells seems to be stop recording, which resultued in vary length of start and end of recording. The behavior of water-level change also vary from one monitoring well to another which might be ascribed due to hydraulic characteristics and distant from stresses. Generally we can deduce a declining trend as a result of over abstraction
+
+
+In a closer investigation for the well that has the longest record of water-level measurements
+
+```{r WL_Longest}
+wlcleaned %>%
+  group_by(STATION_ID) %>%
+  summarise(analysis_count = n())%>%
+  arrange(desc(analysis_count))%>%
+  filter(analysis_count == max(analysis_count))
+
+WL_longest <- wlcleaned %>% select(STATION_ID, DEPTH_TO_WATER, WATER_LEVEL, Year, Month, Day) %>%
+  filter(STATION_ID == 'AL1043') %>% arrange(Year)
+
+WL_longest$date <- ymd(paste(WL_longest$Year,WL_longest$Month,WL_longest$Day,sep="-"))
+
+ggplot(WL_longest, aes(date, DEPTH_TO_WATER)) +
+  geom_point(color="blue", size=2, shape=19 ) +
+  ggtitle("Water-Level for Well AL1043 (1968-2016)") +
+  xlab('Date') + ylab('Depth to Water (m)') +
+  (scale_x_date(breaks=date_breaks("5 years"), position = "top", labels=date_format("%b %y"))) +
+  theme_cleveland() + geom_smooth() +
+  scale_y_reverse()
+ggsave("figures/WL_Timeseries_AL1043.png", width = 6, dpi=300)
+
+```
+
+Water-level in well (AL1043) shows a total decline of more than (40) meters over the past (46) years.
+the decline trends show three distinct periods of slope, the steepest was in the last (10) years.
+
+
+##3- Abstraction Rates Analysis
+
+Abstraction dataset was given in a wide format and needed to be gathered, cleaned by removing NA's, and create summary to understand.
+
+```{r Abstraction}
+abstr_gather <- waterabstr %>% gather('1995':'2013', key = "year", value = "abstraction", na.rm = TRUE, convert = TRUE)
+
+annual_abstr <- abstr_gather %>% 
+  group_by(year) %>%
+  summarise(wells_count = n(),
+            minabstr = min(abstraction, na.rm=TRUE),
+            maxabstr = max(abstraction, na.rm=TRUE),
+            meanabstr = mean(abstraction, na.rm=TRUE),
+            sumabstr = sum(abstraction, na.rm=TRUE))
+
+annual_abstrMCM <- annual_abstr %>% mutate(abstrMCM = sumabstr/1000000)
+
+```
+The data comprises `r nrow(abstr_gather)` observations and `r ncol(abstr_gather)` variables. New column was added represnts sum of abstraction in million cubic meters
+
+
+To enhance understanding about the abstraction rates being pumped from the groundwater and the number of pumping wells, we will plot them
+
+```{r Abstr_comb}
+abstraction <- ggbarplot(annual_abstrMCM, x = "year", y = "abstrMCM", fill = "green", 
+          title = "Annual Abstraction Rates (MCM)",xlab = "Date", ylab = "Abstractions(mcm)") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) + rotate()
+
+abstr_wells <- ggbarplot(annual_abstrMCM, x = "year", y = "wells_count", fill = "green", 
+          title = "Number of Abstraction Wells Yearly", xlab = "Date", ylab = "Number of Wells") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) + rotate()
+
+combo_plot <- grid.arrange(abstraction,abstr_wells, 
+                           ncol=2, widths=c(4,6))
+ggsave("figures/combined abstraction wells.png", combo_plot, width = 10, dpi=300)
+
+```
+
+
+Ploting the relationship between number of wells and abstraction rates
+
+```{r Abstr_cor}
+ggscatter(annual_abstrMCM, x= "wells_count", y= "abstrMCM", color="blue", size=2, shape=19,
+          add = "reg.line", conf.int = TRUE, cor.coef = TRUE, cor.method = "pearson")
+ggsave("figures/Scatter abstraction wells.png", width = 8, dpi=300)
+
+Corr <- cor.test(annual_abstrMCM$wells_count,annual_abstrMCM$abstrMCM)
+
+```
+
+The p-value of the test is less than the significance level alpha = 0.05. We can conclude that abstraction rates and the number of wells are significantly positively correlated with a correlation coefficient of `r Corr$estimate` and p-value of `r Corr$p.value` .
+
+##4- Conclusion:
+
+Groundwater system as part of the hydrological cycle exist in balance under natural conditions, human development and interference will adversely affect the equilibrium conditions. It is obvious that groundwater quality is deteriorating and it is quantity become less abundant. Groundwater resources should be managed in a sustainable manner for future generations.
+
+
